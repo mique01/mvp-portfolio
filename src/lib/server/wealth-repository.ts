@@ -333,7 +333,10 @@ function createDerivedHolding(
     pricing.marketBySymbol.get(normalizeLookupKey(holding.symbol)) ??
     pricing.marketBySymbol.get(normalizeLookupKey(holding.assetName));
   const importPrice = holding.importPrice ?? holding.marketPrice;
-  const currentPrice = priceCandidate?.price ?? null;
+  const currentPrice =
+    priceCandidate?.source === "LIVE_MARKET" || priceCandidate?.source === "LIVE_FUND"
+      ? priceCandidate.price
+      : null;
   const marketPrice =
     currentPrice ??
     importPrice ??
