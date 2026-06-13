@@ -28,6 +28,8 @@ export type ImportStatus = "UPLOADED" | "PARSED" | "NEEDS_REVIEW" | "CONFIRMED" 
 export type ReportKind = "HOLDINGS" | "MOVEMENTS";
 export type ImportRowState = "READY" | "NEEDS_REVIEW" | "IGNORED" | "ERROR";
 export type MatchStatus = "MATCHED" | "AMBIGUOUS" | "NEW_ASSET" | "IGNORED";
+export type MarketDataStatus = "live" | "partial" | "fallback" | "unconfigured";
+export type PriceOrigin = "LIVE_MARKET" | "LIVE_FUND" | "IMPORT" | "CASH" | "MANUAL";
 
 export type MovementType =
   | "BUY"
@@ -113,10 +115,44 @@ export type HoldingRecord = {
   marketValueArs: number;
   marketValueUsd: number | null;
   pnlAmountArs: number | null;
+  pnlPct: number | null;
   pnlIsEstimated: boolean;
+  costBasisArs: number | null;
+  quantityDelta: number;
+  lastMovementDate: string | null;
+  priceSource: PriceOrigin;
+  priceDate: string | null;
   valuationDate: string | null;
   custodianName: string;
   accountName: string;
+};
+
+export type DistributionPoint = {
+  name: string;
+  value: number;
+  pct: number;
+};
+
+export type AccountBreakdown = {
+  id: string;
+  name: string;
+  number?: string | null;
+  totalValueArs: number;
+  pnlAmountArs: number | null;
+  pct: number;
+  holdings: HoldingRecord[];
+};
+
+export type CustodianBreakdown = {
+  name: string;
+  totalValueArs: number;
+  totalValueUsd: number | null;
+  pnlAmountArs: number | null;
+  pct: number;
+  byAsset: DistributionPoint[];
+  byAccount: DistributionPoint[];
+  accounts: AccountBreakdown[];
+  holdings: HoldingRecord[];
 };
 
 export type MovementRecord = {
@@ -235,12 +271,19 @@ export type ClientDetailBundle = {
     totalValueArs: number;
     totalValueUsd: number | null;
     pnlAmountArs: number | null;
+    pnlPct: number | null;
+    mepRate: number | null;
+    pricingUpdatedAt: string | null;
+    marketDataStatus: MarketDataStatus;
   };
   distributions: {
-    byAssetClass: Array<{ name: string; value: number }>;
-    byCurrency: Array<{ name: string; value: number }>;
-    byCustodian: Array<{ name: string; value: number }>;
+    byAssetClass: DistributionPoint[];
+    byCurrency: DistributionPoint[];
+    byCustodian: DistributionPoint[];
+    byAsset: DistributionPoint[];
+    byAccount: DistributionPoint[];
   };
+  custodians: CustodianBreakdown[];
 };
 
 export type ImportsPageBundle = {

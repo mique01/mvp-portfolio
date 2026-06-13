@@ -20,6 +20,14 @@ export function AllocationPie({
   valueFormatter?: (value: number) => string;
   legendValueFormatter?: (value: number) => string;
 }) {
+  if (!data.length) {
+    return (
+      <div className="flex min-h-[220px] items-center justify-center rounded-md border border-dashed border-border/70 bg-background/30 px-4 text-center text-sm text-muted-foreground">
+        No hay datos suficientes para construir esta distribucion.
+      </div>
+    );
+  }
+
   return (
     <div className="grid grid-cols-1 items-center gap-6 md:grid-cols-2">
       <div className="h-56">

@@ -37,13 +37,7 @@ export async function parseImportBatchInput(
   }
 
   if (fileType === "XLSX" || fileType === "XLS" || extension === "xlsx" || extension === "xls") {
-    const workbook = XLSX.read(buffer, { type: "buffer" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-      defval: "",
-      raw: false,
-    });
-    return parseTabularImport(rows.map(stringifyRow), null);
+    return parseWorkbookImport(buffer);
   }
 
   if (fileType === "PDF" || extension === "pdf") {
@@ -74,6 +68,47 @@ export function parseExtractedPdfText(text: string) {
 function parseCsvImport(text: string): ParsedImportResult {
   const rows = parseDelimitedText(text);
   return parseTabularImport(rows, text);
+}
+
+function parseWorkbookImport(buffer: Buffer): ParsedImportResult {
+  const workbook = XLSX.read(buffer, {
+    type: "buffer",
+    cellDates: true,
+  });
+  let fallbackRows: TabularRow[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+
+    const rawRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      defval: "",
+      raw: false,
+      blankrows: false,
+    });
+    const recognizedRows = sheetMatrixToRows(rawRows, true);
+    if (recognizedRows.length) {
+      return parseTabularImport(recognizedRows, `sheet:${sheetName}`);
+    }
+    if (!fallbackRows.length) {
+      fallbackRows = sheetMatrixToRows(rawRows, false);
+    }
+  }
+
+  if (fallbackRows.length) {
+    return parseTabularImport(fallbackRows, null);
+  }
+
+  return buildResult({
+    detectedCustodian: null,
+    detectionConfidence: 0,
+    reportKind: "HOLDINGS",
+    reportDate: null,
+    rows: [],
+    warnings: ["El archivo XLS/XLSX no contiene hojas con datos legibles."],
+    rawText: null,
+  });
 }
 
 function parseTabularImport(rows: TabularRow[], rawText: string | null): ParsedImportResult {
@@ -261,27 +296,82 @@ function stringifyRow(row: Record<string, unknown>): TabularRow {
   );
 }
 
-function parseCocosMovementRow(row: TabularRow, index: number): ParsedRow | null {
-  const symbol = extractTicker(String(row.instrumento ?? ""));
-  const description = String(row.instrumento ?? "").trim();
-  const movementType = inferCocosMovementType(String(row.tipoOperacion ?? ""));
-  const quantity = parseLocaleNumber(row.cantidad);
-  const price = parseLocaleNumber(row.precio);
-  const grossAmount = parseLocaleNumber(row.montoBruto);
-  const fees = parseLocaleNumber(row.comision) + parseLocaleNumber(row.ddmm);
-  const taxes = parseLocaleNumber(row.iva) + parseLocaleNumber(row.otros);
-  const netAmount = parseLocaleNumber(row.total);
-  const assetClass = inferAssetClass(description, symbol, String(row.moneda ?? "ARS"));
+function sheetMatrixToRows(rawRows: unknown[][], requireKnownHeader: boolean): TabularRow[] {
+  const rows = rawRows
+    .filter(Array.isArray)
+    .map((row) => row.map((cell) => stringifySheetCell(cell)))
+    .filter((row) => row.some((cell) => cell.length > 0));
 
-  if (!description && !grossAmount && !netAmount) return null;
+  if (!rows.length) return [];
+
+  const headerRowIndex = findHeaderRowIndex(rows);
+  if (requireKnownHeader && headerRowIndex < 0) return [];
+  const safeHeaderRowIndex = headerRowIndex >= 0 ? headerRowIndex : 0;
+  const headerSource = rows[safeHeaderRowIndex] ?? [];
+  const headers = headerSource.map((value, index) => value.trim() || `col_${index + 1}`);
+
+  return rows
+    .slice(safeHeaderRowIndex + 1)
+    .map((values) => {
+      const row: TabularRow = {};
+      headers.forEach((header, index) => {
+        row[header] = values[index] ?? "";
+      });
+      return row;
+    })
+    .filter((row) => Object.values(row).some((value) => String(value).trim().length > 0));
+}
+
+function stringifySheetCell(value: unknown) {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).trim();
+}
+
+function findHeaderRowIndex(rows: string[][]) {
+  const knownHeaderSets = [
+    ["nroticket", "nrocomprobante", "fechaejecucion", "tipooperacion"],
+    ["instrumento", "cantidad", "precio", "moneda", "total"],
+  ];
+
+  for (let index = 0; index < Math.min(rows.length, 12); index += 1) {
+    const normalized = rows[index].map(normalizeKey).filter(Boolean);
+    if (knownHeaderSets.some((expected) => includesAll(normalized, expected))) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function parseCocosMovementRow(row: TabularRow, index: number): ParsedRow | null {
+  const description = String(row.instrumento ?? row.descripcion ?? row.activo ?? "").trim();
+  const movementType = inferCocosMovementType(String(row.tipoOperacion ?? ""));
+  const currency = normalizeCurrency(String(row.moneda ?? "ARS"));
+  const symbol =
+    extractTicker(description) || inferCashSymbol(currency, description, movementType);
+  const quantity = normalizeMovementQuantity(
+    parseOptionalLocaleNumber(row.cantidad),
+    movementType,
+  );
+  const price = parseOptionalLocaleNumber(row.precio);
+  const grossAmount = parseOptionalLocaleNumber(row.montoBruto);
+  const fees =
+    sumNullableNumbers(parseOptionalLocaleNumber(row.comision), parseOptionalLocaleNumber(row.ddmm));
+  const taxes =
+    sumNullableNumbers(parseOptionalLocaleNumber(row.iva), parseOptionalLocaleNumber(row.otros));
+  const netAmount = parseOptionalLocaleNumber(row.total);
+  const assetClass = inferAssetClass(description, symbol, currency);
+
+  if (!description && grossAmount == null && netAmount == null) return null;
 
   return {
     rowIndex: index,
     state: "READY",
     reportKind: "MOVEMENTS",
-    matchStatus: description ? "MATCHED" : "IGNORED",
+    matchStatus: symbol ? inferMatchStatus(symbol) : "AMBIGUOUS",
     symbol,
-    description,
+    description: description || String(row.tipoOperacion ?? "Movimiento monetario"),
     assetClass,
     movementType,
     quantity,
@@ -290,8 +380,8 @@ function parseCocosMovementRow(row: TabularRow, index: number): ParsedRow | null
     price,
     averageCost: null,
     fxRate: null,
-    marketValue: Math.abs(netAmount || grossAmount) || null,
-    currency: normalizeCurrency(String(row.moneda ?? "ARS")),
+    marketValue: netAmount ?? grossAmount,
+    currency,
     tradeDate: toIsoDate(row.fechaEjecucion),
     settlementDate: toIsoDate(row.fechaLiquidacion),
     custodianName: "Cocos",
@@ -306,30 +396,31 @@ function parseCocosMovementRow(row: TabularRow, index: number): ParsedRow | null
 
 function parseCocosHoldingRow(row: TabularRow, index: number): ParsedRow | null {
   const description = String(row.instrumento ?? "").trim();
-  const symbol = extractTicker(description);
-  const quantity = parseLocaleNumber(row.cantidad);
-  const price = parseLocaleNumber(row.precio);
-  const marketValue = parseLocaleNumber(row.total);
+  const currency = normalizeCurrency(String(row.moneda ?? "ARS"));
+  const symbol = extractTicker(description) || inferCashSymbol(currency, description, "");
+  const quantity = parseOptionalLocaleNumber(row.cantidad);
+  const price = parseOptionalLocaleNumber(row.precio);
+  const marketValue = parseOptionalLocaleNumber(row.total);
 
-  if (!description && !quantity && !marketValue) return null;
+  if (!description && quantity == null && marketValue == null) return null;
 
   return {
     rowIndex: index,
     state: "READY",
     reportKind: "HOLDINGS",
-    matchStatus: description ? "MATCHED" : "IGNORED",
+    matchStatus: symbol ? inferMatchStatus(symbol) : "AMBIGUOUS",
     symbol,
     description,
-    assetClass: inferAssetClass(description, symbol, String(row.moneda ?? "ARS")),
+    assetClass: inferAssetClass(description, symbol, currency),
     movementType: "",
     quantity,
     availableQuantity: quantity,
     pledgedQuantity: 0,
     price,
-    averageCost: price,
-    fxRate: normalizeCurrency(String(row.moneda ?? "ARS")).includes("USD") ? 1 : null,
+    averageCost: null,
+    fxRate: null,
     marketValue,
-    currency: normalizeCurrency(String(row.moneda ?? "ARS")),
+    currency,
     tradeDate: null,
     settlementDate: null,
     custodianName: "Cocos",
@@ -368,24 +459,25 @@ function parseCocosPortfolioPdf(text: string): ParsedRow[] {
     );
     if (!match?.groups) continue;
     const description = match.groups.description.trim();
-    const symbol = extractTicker(description);
+    const currency = normalizeCurrency(match.groups.currency);
+    const symbol = extractTicker(description) || inferCashSymbol(currency, description, "");
     rows.push({
       rowIndex: rows.length,
       state: "READY",
       reportKind: "HOLDINGS",
-      matchStatus: "MATCHED",
+      matchStatus: symbol ? inferMatchStatus(symbol) : "AMBIGUOUS",
       symbol,
       description,
-      assetClass: inferAssetClass(description, symbol, match.groups.currency),
+      assetClass: inferAssetClass(description, symbol, currency),
       movementType: "",
-      quantity: parseLocaleNumber(match.groups.quantity),
-      availableQuantity: parseLocaleNumber(match.groups.quantity),
+      quantity: parseOptionalLocaleNumber(match.groups.quantity),
+      availableQuantity: parseOptionalLocaleNumber(match.groups.quantity),
       pledgedQuantity: 0,
-      price: parseLocaleNumber(match.groups.price),
-      averageCost: parseLocaleNumber(match.groups.price),
-      fxRate: match.groups.currency.includes("USD") ? parseImplicitFx(text) : null,
-      marketValue: parseLocaleNumber(match.groups.totalArs || match.groups.total),
-      currency: normalizeCurrency(match.groups.currency),
+      price: parseOptionalLocaleNumber(match.groups.price),
+      averageCost: null,
+      fxRate: null,
+      marketValue: parseOptionalLocaleNumber(match.groups.totalArs || match.groups.total),
+      currency,
       tradeDate: null,
       settlementDate: null,
       custodianName: "Cocos",
@@ -576,7 +668,7 @@ function parseAllariaMovementsText(text: string): ParsedRow[] {
       description,
       assetClass: inferAssetClass(description, symbol, description.includes(" MEP") ? "USD" : "ARS"),
       movementType: inferMovementTypeFromText(description),
-      quantity,
+      quantity: normalizeMovementQuantity(quantity, inferMovementTypeFromText(description)),
       availableQuantity: null,
       pledgedQuantity: null,
       price,
@@ -654,7 +746,9 @@ function extractTicker(raw: string) {
   if (match?.[1]) return normalizeSymbol(match[1]);
 
   const firstToken = raw.trim().split(/\s+/)[0] ?? "";
-  return normalizeSymbol(firstToken);
+  const normalized = normalizeSymbol(firstToken);
+  if (["FCI", "FONDO", "CEDEAR", "BONO"].includes(normalized)) return "";
+  return normalized;
 }
 
 function normalizeSymbol(value: string) {
@@ -714,6 +808,28 @@ function inferMovementTypeFromText(value: string): MovementType {
   return "OTHER";
 }
 
+function inferCashSymbol(
+  currency: string,
+  description: string,
+  movementType: MovementType | "OTHER" | "",
+) {
+  const normalized = normalizeText(`${currency} ${description} ${movementType}`);
+  if (normalized.includes("usd") || normalized.includes("dolar")) {
+    if (normalized.includes("mep")) return "USD_MEP";
+    if (normalized.includes("cable")) return "USD_CABLE";
+    return "USD";
+  }
+  if (
+    normalized.includes("ars") ||
+    normalized.includes("peso") ||
+    movementType === "DEPOSIT" ||
+    movementType === "WITHDRAWAL"
+  ) {
+    return "ARS";
+  }
+  return "";
+}
+
 function parseLocaleNumber(value: string | number | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (value == null) return 0;
@@ -737,6 +853,47 @@ function parseLocaleNumber(value: string | number | null | undefined) {
   }
 
   return Number(normalized);
+}
+
+function parseOptionalLocaleNumber(value: string | number | null | undefined) {
+  if (value == null || String(value).trim() === "") return null;
+  const parsed = parseLocaleNumber(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sumNullableNumbers(...values: Array<number | null>) {
+  const present = values.filter((value): value is number => value != null);
+  if (!present.length) return null;
+  return present.reduce((sum, value) => sum + value, 0);
+}
+
+function normalizeMovementQuantity(
+  quantity: number | null,
+  movementType: MovementType | "OTHER" | "",
+) {
+  if (quantity == null) return null;
+  const magnitude = Math.abs(quantity);
+
+  switch (movementType) {
+    case "BUY":
+    case "FUND_SUBSCRIPTION":
+    case "DIVIDEND":
+    case "COUPON":
+    case "DEPOSIT":
+    case "TRANSFER_IN":
+    case "CASH_RELEASE":
+      return magnitude;
+    case "SELL":
+    case "FUND_REDEMPTION":
+    case "WITHDRAWAL":
+    case "TRANSFER_OUT":
+    case "FEE":
+    case "TAX":
+    case "CASH_BLOCK":
+      return -magnitude;
+    default:
+      return quantity;
+  }
 }
 
 function includesAll(values: string[], expected: string[]) {

@@ -313,7 +313,7 @@ function normalizeFciRow(row: FciApiRow, endpoint: EndpointKey): NormalizedMarke
 
   const label = safeString(row.fondo);
   if (!label) return null;
-  if (!label.toLowerCase().startsWith("allaria")) return null;
+  const tickerMatch = label.match(/\(([A-Z0-9.\-]{1,16})\)/);
 
   const vcp = safeNumber(row.vcp);
   const patrimonio = safeNumber(row.patrimonio);
@@ -322,7 +322,7 @@ function normalizeFciRow(row: FciApiRow, endpoint: EndpointKey): NormalizedMarke
   return {
     tipo: "FCI",
     endpoint,
-    symbol: normalizeSymbol(label),
+    symbol: normalizeSymbol(tickerMatch?.[1] ?? label),
     label,
     bid: 0,
     ask: 0,

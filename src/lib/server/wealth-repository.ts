@@ -1,8 +1,13 @@
 import { prisma } from "@/lib/server/prisma/client";
 import { parseImportBatchInput } from "@/lib/server/import-parser";
+import {
+  loadConsolidatedMarketData,
+  loadDollarRates,
+} from "@/lib/server/market-data";
 import type {
   AccountRecord,
   AppUser,
+  AccountBreakdown,
   AssetClass,
   AssetRecord,
   AssetsPageBundle,
@@ -13,7 +18,9 @@ import type {
   CreateCustodianInput,
   CreateImportBatchInput,
   CustodianRecord,
+  CustodianBreakdown,
   DashboardSummary,
+  DistributionPoint,
   FundsPageBundle,
   HoldingRecord,
   ImportBatchDetail,
@@ -21,8 +28,10 @@ import type {
   ImportRowPreview,
   ImportsPageBundle,
   MatchStatus,
+  MarketDataStatus,
   MovementRecord,
   MovementType,
+  PriceOrigin,
   SaveImportRowsInput,
   SettingsBundle,
 } from "@/lib/wealth-types";
@@ -51,6 +60,20 @@ type StateSnapshot = {
 };
 
 type MemoryState = StateSnapshot;
+
+type PricingContext = {
+  marketDataStatus: MarketDataStatus;
+  pricingUpdatedAt: string | null;
+  mepRate: number | null;
+  marketBySymbol: Map<
+    string,
+    {
+      price: number;
+      asOf: string | null;
+      source: PriceOrigin;
+    }
+  >;
+};
 
 const globalForWealth = globalThis as unknown as {
   wealthState?: MemoryState;
@@ -84,6 +107,380 @@ function aggregateBy<T>(items: T[], getKey: (item: T) => string, getValue: (item
     map.set(key, (map.get(key) ?? 0) + getValue(item));
   });
   return [...map.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+}
+
+function normalizeLookupKey(value: string | null | undefined) {
+  return (value ?? "")
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isoDate(value: string | null | undefined) {
+  return value?.slice(0, 10) ?? null;
+}
+
+function compareIsoDates(left: string | null | undefined, right: string | null | undefined) {
+  if (!left && !right) return 0;
+  if (!left) return -1;
+  if (!right) return 1;
+  return left.localeCompare(right);
+}
+
+function toDistributionPoints(items: Array<{ name: string; value: number }>): DistributionPoint[] {
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  return items.map((item) => ({
+    name: item.name,
+    value: round(item.value) ?? 0,
+    pct: total > 0 ? Number(((item.value / total) * 100).toFixed(1)) : 0,
+  }));
+}
+
+function signedMovementQuantity(movement: MovementRecord) {
+  if (movement.quantity == null) return 0;
+  const quantity = Math.abs(movement.quantity);
+  switch (movement.movementType) {
+    case "BUY":
+    case "FUND_SUBSCRIPTION":
+    case "TRANSFER_IN":
+    case "CASH_RELEASE":
+      return quantity;
+    case "SELL":
+    case "FUND_REDEMPTION":
+    case "TRANSFER_OUT":
+    case "CASH_BLOCK":
+      return -quantity;
+    default:
+      return movement.quantity;
+  }
+}
+
+function movementUnitCost(movement: MovementRecord) {
+  if (
+    (movement.movementType === "BUY" || movement.movementType === "FUND_SUBSCRIPTION") &&
+    movement.netAmount != null &&
+    movement.quantity != null &&
+    movement.quantity !== 0
+  ) {
+    return Math.abs(movement.netAmount) / Math.abs(movement.quantity);
+  }
+  if (movement.price != null && movement.price > 0) return Math.abs(movement.price);
+  if (movement.netAmount != null && movement.quantity != null && movement.quantity !== 0) {
+    return Math.abs(movement.netAmount) / Math.abs(movement.quantity);
+  }
+  if (movement.grossAmount != null && movement.quantity != null && movement.quantity !== 0) {
+    return Math.abs(movement.grossAmount) / Math.abs(movement.quantity);
+  }
+  return null;
+}
+
+async function loadPricingContext(state: StateSnapshot): Promise<PricingContext> {
+  const fundLookup = new Map<
+    string,
+    {
+      price: number;
+      asOf: string | null;
+      source: PriceOrigin;
+    }
+  >();
+
+  state.funds.forEach((fund) => {
+    if (fund.latestPrice == null) return;
+    const payload = {
+      price: fund.latestPrice,
+      asOf: fund.latestPriceDate,
+      source: "IMPORT" as const,
+    };
+    [fund.code, fund.name, fund.assetSymbol].forEach((value) => {
+      const key = normalizeLookupKey(value);
+      if (key) fundLookup.set(key, payload);
+    });
+  });
+
+  try {
+    const [market, dollars] = await Promise.all([
+      loadConsolidatedMarketData(),
+      loadDollarRates(),
+    ]);
+
+    const marketBySymbol = new Map<string, { price: number; asOf: string | null; source: PriceOrigin }>();
+    market.quotes.forEach((quote) => {
+      const hasBid = quote.bid > 0;
+      const hasAsk = quote.ask > 0;
+      const livePrice = hasBid && hasAsk ? (quote.bid + quote.ask) / 2 : hasBid ? quote.bid : hasAsk ? quote.ask : quote.last;
+      if (!(livePrice > 0)) return;
+
+      const payload = {
+        price: livePrice,
+        asOf: quote.fecha ?? isoDate(market.fetchedAt),
+        source: quote.tipo === "FCI" ? ("LIVE_FUND" as const) : ("LIVE_MARKET" as const),
+      };
+
+      [quote.symbol, quote.label].forEach((value) => {
+        const key = normalizeLookupKey(value ?? "");
+        if (key) marketBySymbol.set(key, payload);
+      });
+    });
+
+    fundLookup.forEach((value, key) => {
+      if (!marketBySymbol.has(key)) {
+        marketBySymbol.set(key, value);
+      }
+    });
+
+    return {
+      marketDataStatus: market.marketDataStatus,
+      pricingUpdatedAt: market.fetchedAt,
+      mepRate: dollars.mep?.venta && dollars.mep.venta > 0 ? Number(dollars.mep.venta) : null,
+      marketBySymbol,
+    };
+  } catch (error) {
+    console.error("[wealth-repository] live pricing fallback", error);
+    return {
+      marketDataStatus: "fallback",
+      pricingUpdatedAt: null,
+      mepRate: null,
+      marketBySymbol: fundLookup,
+    };
+  }
+}
+
+function createDerivedHolding(
+  holding: HoldingRecord,
+  pricing: PricingContext,
+): HoldingRecord {
+  const priceCandidate =
+    pricing.marketBySymbol.get(normalizeLookupKey(holding.symbol)) ??
+    pricing.marketBySymbol.get(normalizeLookupKey(holding.assetName));
+  const marketPrice =
+    priceCandidate?.price ??
+    holding.marketPrice ??
+    (holding.assetClass === "CASH" ? 1 : null);
+  const priceSource = priceCandidate?.source ?? (holding.assetClass === "CASH" ? "CASH" : "IMPORT");
+  const priceDate = priceCandidate?.asOf ?? holding.priceDate ?? holding.valuationDate;
+  const fxRate =
+    holding.currency.startsWith("USD")
+      ? pricing.mepRate ?? holding.fxRate ?? 1
+      : 1;
+  const quantity = holding.quantity;
+  const marketValueArs =
+    marketPrice == null
+      ? holding.marketValueArs
+      : holding.currency.startsWith("USD")
+        ? quantity * marketPrice * fxRate
+        : quantity * marketPrice;
+  const marketValueUsd =
+    marketPrice == null
+      ? holding.marketValueUsd
+      : holding.currency.startsWith("USD")
+        ? quantity * marketPrice
+        : pricing.mepRate && pricing.mepRate > 0
+          ? marketValueArs / pricing.mepRate
+          : holding.marketValueUsd;
+  const costBasisArs =
+    holding.averageCost == null
+      ? null
+      : holding.currency.startsWith("USD")
+        ? quantity * holding.averageCost * fxRate
+        : quantity * holding.averageCost;
+  const pnlAmountArs =
+    costBasisArs == null ? null : round(marketValueArs - costBasisArs);
+  const pnlPct =
+    pnlAmountArs == null || costBasisArs == null || costBasisArs <= 0
+      ? null
+      : Number(((pnlAmountArs / costBasisArs) * 100).toFixed(2));
+
+  return {
+    ...holding,
+    marketPrice,
+    fxRate,
+    marketValueArs: round(marketValueArs) ?? 0,
+    marketValueUsd: round(marketValueUsd),
+    pnlAmountArs,
+    pnlPct,
+    pnlIsEstimated: holding.pnlIsEstimated || holding.averageCost == null,
+    costBasisArs: round(costBasisArs),
+    priceSource,
+    priceDate,
+  };
+}
+
+function deriveHoldingsFromState(state: StateSnapshot, pricing: PricingContext) {
+  const accountLookup = new Map(state.accounts.map((account) => [account.id, account] as const));
+  const assetLookup = new Map(state.assets.map((asset) => [asset.id, asset] as const));
+  const baseByKey = new Map<string, HoldingRecord>();
+
+  state.holdings.forEach((holding) => {
+    baseByKey.set(`${holding.accountId}::${holding.assetId}`, {
+      ...holding,
+      quantityDelta: 0,
+      lastMovementDate: null,
+    });
+  });
+
+  const sortedMovements = [...state.movements].sort((left, right) =>
+    left.tradeDate.localeCompare(right.tradeDate),
+  );
+
+  sortedMovements.forEach((movement) => {
+    const asset =
+      (movement.assetId ? assetLookup.get(movement.assetId) : undefined) ??
+      state.assets.find((item) => normalizeLookupKey(item.symbol) === normalizeLookupKey(movement.symbol)) ??
+      null;
+    if (!asset) return;
+
+    const account = accountLookup.get(movement.accountId);
+    if (!account) return;
+
+    const key = `${movement.accountId}::${asset.id}`;
+    const existing = baseByKey.get(key) ?? {
+      id: cuid("drv"),
+      clientId: movement.clientId,
+      accountId: movement.accountId,
+      assetId: asset.id,
+      symbol: asset.symbol,
+      assetName: asset.name,
+      assetClass: asset.assetClass,
+      currency: asset.currency,
+      quantity: 0,
+      availableQuantity: 0,
+      pledgedQuantity: 0,
+      averageCost: null,
+      marketPrice: null,
+      fxRate: null,
+      marketValueArs: 0,
+      marketValueUsd: null,
+      pnlAmountArs: null,
+      pnlPct: null,
+      pnlIsEstimated: true,
+      costBasisArs: null,
+      quantityDelta: 0,
+      lastMovementDate: null,
+      priceSource: "MANUAL",
+      priceDate: null,
+      valuationDate: null,
+      custodianName: account.custodianName,
+      accountName: account.name,
+    };
+
+    if (existing.valuationDate && compareIsoDates(movement.tradeDate, existing.valuationDate) <= 0) {
+      return;
+    }
+
+    const delta = signedMovementQuantity(movement);
+    if (delta === 0) return;
+
+    if (delta > 0) {
+      const previousQty = existing.quantity;
+      const previousCost = (existing.averageCost ?? 0) * previousQty;
+      const unitCost = movementUnitCost(movement) ?? existing.averageCost ?? 0;
+      const nextQty = previousQty + delta;
+      existing.quantity = nextQty;
+      existing.availableQuantity = nextQty;
+      existing.averageCost = nextQty > 0 ? (previousCost + delta * unitCost) / nextQty : existing.averageCost;
+      existing.marketPrice = existing.marketPrice ?? unitCost;
+      existing.fxRate = existing.fxRate ?? movement.fxRate ?? null;
+    } else {
+      const nextQty = Math.max(0, existing.quantity + delta);
+      existing.quantity = nextQty;
+      existing.availableQuantity = nextQty;
+      if (nextQty === 0) {
+        existing.averageCost = null;
+      }
+    }
+
+    existing.quantityDelta = round((existing.quantityDelta ?? 0) + delta, 4) ?? 0;
+    existing.lastMovementDate =
+      !existing.lastMovementDate || compareIsoDates(movement.tradeDate, existing.lastMovementDate) > 0
+        ? movement.tradeDate
+        : existing.lastMovementDate;
+
+    baseByKey.set(key, existing);
+  });
+
+  return [...baseByKey.values()]
+    .filter((holding) => holding.quantity > 0.000001)
+    .map((holding) => createDerivedHolding(holding, pricing))
+    .sort((left, right) => right.marketValueArs - left.marketValueArs);
+}
+
+async function buildDerivedState(state: StateSnapshot) {
+  const pricing = await loadPricingContext(state);
+  return {
+    ...state,
+    holdings: deriveHoldingsFromState(state, pricing),
+    pricing,
+  };
+}
+
+function buildCustodianBreakdowns(
+  holdings: HoldingRecord[],
+  accounts: Array<AccountRecord & { custodianName: string }>,
+): CustodianBreakdown[] {
+  const total = holdings.reduce((sum, holding) => sum + holding.marketValueArs, 0);
+  const accountLookup = new Map(accounts.map((account) => [account.id, account] as const));
+  const byCustodian = new Map<string, HoldingRecord[]>();
+
+  holdings.forEach((holding) => {
+    const bucket = byCustodian.get(holding.custodianName) ?? [];
+    bucket.push(holding);
+    byCustodian.set(holding.custodianName, bucket);
+  });
+
+  return [...byCustodian.entries()]
+    .map(([name, items]) => {
+      const totalValueArs = round(items.reduce((sum, item) => sum + item.marketValueArs, 0)) ?? 0;
+      const totalValueUsd = items.some((item) => item.marketValueUsd != null)
+        ? round(items.reduce((sum, item) => sum + (item.marketValueUsd ?? 0), 0))
+        : null;
+      const pnlAmountArs = items.some((item) => item.pnlAmountArs != null)
+        ? round(items.reduce((sum, item) => sum + (item.pnlAmountArs ?? 0), 0))
+        : null;
+
+      const accountBreakdowns: AccountBreakdown[] = [...new Set(items.map((item) => item.accountId))]
+        .map((accountId) => {
+          const accountItems = items.filter((item) => item.accountId === accountId);
+          const account = accountLookup.get(accountId);
+          const accountTotal = round(accountItems.reduce((sum, item) => sum + item.marketValueArs, 0)) ?? 0;
+          const accountPnl = accountItems.some((item) => item.pnlAmountArs != null)
+            ? round(accountItems.reduce((sum, item) => sum + (item.pnlAmountArs ?? 0), 0))
+            : null;
+
+          return {
+            id: accountId,
+            name: account?.name ?? accountItems[0]?.accountName ?? "Cuenta",
+            number: account?.number ?? null,
+            totalValueArs: accountTotal,
+            pnlAmountArs: accountPnl,
+            pct: totalValueArs > 0 ? Number(((accountTotal / totalValueArs) * 100).toFixed(1)) : 0,
+            holdings: accountItems.sort((left, right) => right.marketValueArs - left.marketValueArs),
+          };
+        })
+        .sort((left, right) => right.totalValueArs - left.totalValueArs);
+
+      return {
+        name,
+        totalValueArs,
+        totalValueUsd,
+        pnlAmountArs,
+        pct: total > 0 ? Number(((totalValueArs / total) * 100).toFixed(1)) : 0,
+        byAsset: toDistributionPoints(
+          aggregateBy(items, (item) => item.symbol, (item) => item.marketValueArs),
+        ),
+        byAccount: toDistributionPoints(
+          aggregateBy(
+            accountBreakdowns,
+            (account) => account.name,
+            (account) => account.totalValueArs,
+          ),
+        ),
+        accounts: accountBreakdowns,
+        holdings: items.sort((left, right) => right.marketValueArs - left.marketValueArs),
+      };
+    })
+    .sort((left, right) => right.totalValueArs - left.totalValueArs);
 }
 
 function getMemoryState() {
@@ -175,7 +572,17 @@ function getMemoryState() {
     { id: "ast_usdm", symbol: "USD_MEP", name: "Dolar MEP", assetClass: "CASH", currency: "USD_MEP", isFund: false, isCashLike: true },
   ];
 
-  const holdings: HoldingRecord[] = [
+  const holdingsBase: Array<
+    Omit<
+      HoldingRecord,
+      | "pnlPct"
+      | "costBasisArs"
+      | "quantityDelta"
+      | "lastMovementDate"
+      | "priceSource"
+      | "priceDate"
+    >
+  > = [
     {
       id: "h1",
       clientId: "cli_claudia",
@@ -338,6 +745,28 @@ function getMemoryState() {
       accountName: "Custodia Galicia 01",
     },
   ];
+
+  const holdings: HoldingRecord[] = holdingsBase.map((holding) => ({
+    ...holding,
+    pnlPct:
+      holding.averageCost != null && holding.quantity > 0
+        ? Number(
+            (((holding.pnlAmountArs ?? 0) / Math.max(holding.averageCost * holding.quantity, 1)) * 100).toFixed(2),
+          )
+        : null,
+    costBasisArs:
+      holding.averageCost == null
+        ? null
+        : round(
+            holding.currency.startsWith("USD")
+              ? holding.averageCost * holding.quantity * (holding.fxRate ?? 1)
+              : holding.averageCost * holding.quantity,
+          ),
+    quantityDelta: 0,
+    lastMovementDate: null,
+    priceSource: holding.assetClass === "CASH" ? "CASH" : "IMPORT",
+    priceDate: holding.valuationDate,
+  }));
 
   const movements: MovementRecord[] = [
     {
@@ -559,7 +988,13 @@ async function readState(): Promise<StateSnapshot> {
       marketValueArs: Number(holding.marketValueArs ?? 0),
       marketValueUsd: holding.marketValueUsd == null ? null : Number(holding.marketValueUsd),
       pnlAmountArs: holding.pnlAmountArs == null ? null : Number(holding.pnlAmountArs),
+      pnlPct: null,
       pnlIsEstimated: holding.pnlIsEstimated,
+      costBasisArs: null,
+      quantityDelta: 0,
+      lastMovementDate: null,
+      priceSource: holding.asset.assetClass === "CASH" ? "CASH" : "IMPORT",
+      priceDate: holding.valuationDate?.toISOString().slice(0, 10) ?? null,
       valuationDate: holding.valuationDate?.toISOString().slice(0, 10) ?? null,
       custodianName: holding.account.custodian.name,
       accountName: holding.account.name,
@@ -660,7 +1095,7 @@ function summarizeClient(state: StateSnapshot, client: ClientRecord): ClientSumm
 }
 
 export async function getDashboardSummary() {
-  const state = await readState();
+  const state = await buildDerivedState(await readState());
   const clientSummaries = state.clients.map((client) => summarizeClient(state, client));
   const totalValueArs = clientSummaries.reduce((sum, item) => sum + item.totalValueArs, 0);
   const totalValueUsd = clientSummaries.some((item) => item.totalValueUsd != null)
@@ -702,12 +1137,12 @@ export async function getDashboardSummary() {
 }
 
 export async function getClientsBundle() {
-  const state = await readState();
+  const state = await buildDerivedState(await readState());
   return state.clients.map((client) => summarizeClient(state, client));
 }
 
 export async function getClientDetail(clientId: string): Promise<ClientDetailBundle | null> {
-  const state = await readState();
+  const state = await buildDerivedState(await readState());
   const client = state.clients.find((item) => item.id === clientId) ?? null;
   if (!client) return null;
 
@@ -719,44 +1154,72 @@ export async function getClientDetail(clientId: string): Promise<ClientDetailBun
     .filter((movement) => movement.clientId === client.id)
     .sort((left, right) => right.tradeDate.localeCompare(left.tradeDate));
   const imports = state.imports.filter((item) => item.clientId === client.id);
+  const totalValueArs = round(holdings.reduce((sum, holding) => sum + holding.marketValueArs, 0)) ?? 0;
+  const totalValueUsd = holdings.some((holding) => holding.marketValueUsd != null)
+    ? round(holdings.reduce((sum, holding) => sum + (holding.marketValueUsd ?? 0), 0))
+    : null;
+  const pnlAmountArs = holdings.some((holding) => holding.pnlAmountArs != null)
+    ? round(holdings.reduce((sum, holding) => sum + (holding.pnlAmountArs ?? 0), 0))
+    : null;
+  const costBasisArs = holdings.some((holding) => holding.costBasisArs != null)
+    ? round(holdings.reduce((sum, holding) => sum + (holding.costBasisArs ?? 0), 0))
+    : null;
+  const custodianAccounts = accounts.map((account) => ({
+    id: account.id,
+    clientId: account.clientId,
+    custodianId: account.custodianId,
+    name: account.name,
+    number: account.number,
+    currency: account.currency,
+    custodianName: account.custodianName,
+  }));
+  const custodians = buildCustodianBreakdowns(holdings, custodianAccounts);
 
   return {
     client,
-    accounts: accounts.map((account) => ({
-      id: account.id,
-      clientId: account.clientId,
-      custodianId: account.custodianId,
-      name: account.name,
-      number: account.number,
-      currency: account.currency,
-      custodianName: account.custodianName,
-    })),
+    accounts: custodianAccounts,
     holdings,
     movements,
     imports: imports.map(toSummary),
     totals: {
-      totalValueArs: round(holdings.reduce((sum, holding) => sum + holding.marketValueArs, 0)) ?? 0,
-      totalValueUsd: holdings.some((holding) => holding.marketValueUsd != null)
-        ? round(holdings.reduce((sum, holding) => sum + (holding.marketValueUsd ?? 0), 0))
-        : null,
-      pnlAmountArs: holdings.some((holding) => holding.pnlAmountArs != null)
-        ? round(holdings.reduce((sum, holding) => sum + (holding.pnlAmountArs ?? 0), 0))
-        : null,
+      totalValueArs,
+      totalValueUsd,
+      pnlAmountArs,
+      pnlPct:
+        pnlAmountArs == null || costBasisArs == null || costBasisArs <= 0
+          ? null
+          : Number(((pnlAmountArs / costBasisArs) * 100).toFixed(2)),
+      mepRate: state.pricing.mepRate,
+      pricingUpdatedAt: state.pricing.pricingUpdatedAt,
+      marketDataStatus: state.pricing.marketDataStatus,
     },
     distributions: {
-      byAssetClass: aggregateBy(
-        holdings,
-        (holding) => assetClassLabel(holding.assetClass),
-        (holding) => holding.marketValueArs,
+      byAssetClass: toDistributionPoints(
+        aggregateBy(
+          holdings,
+          (holding) => assetClassLabel(holding.assetClass),
+          (holding) => holding.marketValueArs,
+        ),
       ),
-      byCurrency: aggregateBy(holdings, (holding) => holding.currency, (holding) => holding.marketValueArs),
-      byCustodian: aggregateBy(holdings, (holding) => holding.custodianName, (holding) => holding.marketValueArs),
+      byCurrency: toDistributionPoints(
+        aggregateBy(holdings, (holding) => holding.currency, (holding) => holding.marketValueArs),
+      ),
+      byCustodian: toDistributionPoints(
+        aggregateBy(holdings, (holding) => holding.custodianName, (holding) => holding.marketValueArs),
+      ),
+      byAsset: toDistributionPoints(
+        aggregateBy(holdings, (holding) => holding.symbol, (holding) => holding.marketValueArs),
+      ),
+      byAccount: toDistributionPoints(
+        aggregateBy(holdings, (holding) => holding.accountName, (holding) => holding.marketValueArs),
+      ),
     },
+    custodians,
   };
 }
 
 export async function getImportsBundle(): Promise<ImportsPageBundle> {
-  const state = await readState();
+  const state = await buildDerivedState(await readState());
   return {
     clients: state.clients.map((client) => summarizeClient(state, client)),
     custodians: state.custodians,
@@ -1116,7 +1579,20 @@ export async function confirmImportBatch(importId: string) {
             row.averageCost != null && row.price != null && row.quantity != null
               ? round((row.price - row.averageCost) * row.quantity * (fxRate || 1))
               : null,
+          pnlPct: null,
           pnlIsEstimated: row.averageCost == null,
+          costBasisArs:
+            row.averageCost != null && row.quantity != null
+              ? round(
+                  row.currency.startsWith("USD")
+                    ? row.averageCost * row.quantity * (fxRate || 1)
+                    : row.averageCost * row.quantity,
+                )
+              : null,
+          quantityDelta: 0,
+          lastMovementDate: null,
+          priceSource: asset.assetClass === "CASH" ? "CASH" : "IMPORT",
+          priceDate: row.reportDate,
           valuationDate: row.reportDate,
           custodianName: batch.custodianName ?? account.custodianName,
           accountName: account.name,
