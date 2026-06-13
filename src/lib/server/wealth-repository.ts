@@ -139,6 +139,27 @@ function toDistributionPoints(items: Array<{ name: string; value: number }>): Di
   }));
 }
 
+function inferQuoteCurrency(
+  assetCurrency: string | undefined,
+  label: string | undefined,
+) {
+  if (assetCurrency) return assetCurrency;
+  const normalized = normalizeLookupKey(label);
+  if (normalized.includes("DOLAR") || normalized.includes("USD")) return "USD";
+  return "ARS";
+}
+
+function normalizeFundQuotePrice(
+  rawPrice: number,
+  quoteCurrency: string,
+) {
+  if (!Number.isFinite(rawPrice) || rawPrice <= 0) return rawPrice;
+  if (quoteCurrency.startsWith("USD") && rawPrice >= 100) {
+    return rawPrice / 1000;
+  }
+  return rawPrice;
+}
+
 function signedMovementQuantity(movement: MovementRecord) {
   if (movement.quantity == null) return 0;
   const quantity = Math.abs(movement.quantity);
@@ -223,12 +244,23 @@ async function loadPricingContext(state: StateSnapshot): Promise<PricingContext>
       const hasAsk = quote.ask > 0;
       const livePrice = hasBid && hasAsk ? (quote.bid + quote.ask) / 2 : hasBid ? quote.bid : hasAsk ? quote.ask : quote.last;
       if (!(livePrice > 0)) return;
+      const assetCurrency =
+        assetCurrencyBySymbol.get(normalizeLookupKey(quote.symbol)) ??
+        assetCurrencyBySymbol.get(normalizeLookupKey(quote.label ?? ""));
+      const quoteCurrency =
+        quote.tipo === "FCI"
+          ? inferQuoteCurrency(assetCurrency, quote.label ?? quote.symbol)
+          : "NATIVE";
+      const normalizedPrice =
+        quote.tipo === "FCI"
+          ? normalizeFundQuotePrice(livePrice, quoteCurrency)
+          : livePrice;
 
       const payload = {
-        price: livePrice,
+        price: normalizedPrice,
         asOf: quote.fecha ?? isoDate(market.fetchedAt),
         source: quote.tipo === "FCI" ? ("LIVE_FUND" as const) : ("LIVE_MARKET" as const),
-        quoteCurrency: quote.tipo === "FCI" ? "ARS" : "NATIVE",
+        quoteCurrency,
       };
 
       [quote.symbol, quote.label].forEach((value) => {
