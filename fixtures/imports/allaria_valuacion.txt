@@ -1,0 +1,25 @@
+Valuación de cartera
+Cuenta: 600931931 / CLIENTE DEMO 931931
+Fecha: 12/06/26
+Moneda de Valuación: Pesos (TC Implícito) - Concertación
+Instrumento Abrev. Instrumento Desc. Rendimiento Cantidad Disp. Cantidad gtia. Precio PPC TC Monto en moneda de cotización Valuación Participación
+MELI CEDEAR MERCADOLIBRE INC. -1.16%
+$ -4.469,62
+19 - $ 19.800,00
+12/06/2026
+$ 20.345,24 $1,00 $ 376.200,00 $ 376.200,00 6.08%
+AL D
+RET A
+MEP
+Allaria Dólar Retorno Total - Clase A - MEP - Retorno Total
++8.49%
+$ 71.102,89
+497,79 - US$ 1,259311
+11/06/2026
+$ 1.682,99 $1.448,33 US$ 626,87 $ 907.917,77 14.69%
+AO28 BONO TESORO NACIONAL 6% 31/10/28 USD
+-0.88%
+$ -6.391,24
+517 - US$ 0,96
+12/06/2026
+$ 1.406,55 $1.448,33 US$ 498,13 $ 721.455,90 11.67%

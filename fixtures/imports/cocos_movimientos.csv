@@ -1,0 +1,3 @@
+nroTicket;nroComprobante;fechaEjecucion;fechaLiquidacion;tipoOperacion;instrumento;moneda;mercado;cantidad;precio;montoBruto;comision;ddmm;iva;otros;total
+104185452;3290544;04-05-2026;05-05-2026;Liquidacion Rescate Fci;FCI COCOS RENDIMIENTO CL. A $ ESC (COCORMA);ARS;;-199.722,2291;1.347,408;269.107,3293;0;0;0;0;269.107,33
+105073129;3522208;08-05-2026;11-05-2026;Compra;CEDEAR MERCADOLIBRE INC. (MELI);ARS;BYMA;9;20.303,3333;-182.730;-822,285;-91,365;-191,8665;0;-183.835,52

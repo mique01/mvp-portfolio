@@ -1,0 +1,500 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ORG_ADMIN
+  INTERNAL_EDITOR
+  CLIENT_VIEWER
+}
+
+enum ClientType {
+  INSTITUTIONAL
+  PRIVATE
+  FAMILY_OFFICE
+  CORPORATE
+  OTHER
+}
+
+enum CustodianType {
+  ALYC
+  BANK
+  BROKER
+  OTHER
+}
+
+enum AccountKind {
+  INVESTMENT
+  CASH
+  OMNIBUS
+  OTHER
+}
+
+enum AssetClass {
+  CASH
+  SOVEREIGN_BOND
+  CORPORATE_BOND
+  LETTER
+  FUND
+  CEDEAR
+  EQUITY
+  ETF
+  OPTION
+  FUTURE
+  FIXED_TERM
+  CAUCION
+  OTHER
+}
+
+enum ImportStatus {
+  UPLOADED
+  PARSED
+  NEEDS_REVIEW
+  CONFIRMED
+  FAILED
+}
+
+enum ReportKind {
+  HOLDINGS
+  MOVEMENTS
+}
+
+enum ImportRowState {
+  READY
+  NEEDS_REVIEW
+  IGNORED
+  ERROR
+}
+
+enum MatchStatus {
+  MATCHED
+  AMBIGUOUS
+  NEW_ASSET
+  IGNORED
+}
+
+enum MovementType {
+  BUY
+  SELL
+  FUND_SUBSCRIPTION
+  FUND_REDEMPTION
+  DIVIDEND
+  COUPON
+  AMORTIZATION
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER_IN
+  TRANSFER_OUT
+  FEE
+  TAX
+  CASH_BLOCK
+  CASH_RELEASE
+  OTHER
+}
+
+enum PriceSource {
+  MARKET
+  FUND
+  IMPORT
+  FX
+  MANUAL
+}
+
+model Organization {
+  id           String        @id @default(cuid())
+  name         String
+  slug         String        @unique
+  baseCurrency String        @default("ARS")
+  users        User[]
+  clients      Client[]
+  custodians   Custodian[]
+  accounts     Account[]
+  assets       Asset[]
+  imports      ImportBatch[]
+  holdings     Holding[]
+  movements    Movement[]
+  prices       Price[]
+  fxRates      FxRate[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String       @unique
+  name           String
+  role           UserRole     @default(INTERNAL_EDITOR)
+  clientLinks    ClientUser[]
+  imports        ImportBatch[] @relation("CreatedImports")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model Client {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           ClientType    @default(INSTITUTIONAL)
+  name           String
+  legalName      String?
+  email          String?
+  phone          String?
+  taxId          String?
+  notes          String?
+  clientUsers    ClientUser[]
+  accounts       Account[]
+  imports        ImportBatch[]
+  holdings       Holding[]
+  movements      Movement[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+model ClientUser {
+  id         String   @id @default(cuid())
+  clientId   String
+  userId     String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  canEdit    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@unique([clientId, userId])
+  @@index([userId])
+}
+
+model Custodian {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  code           String?
+  type           CustodianType @default(ALYC)
+  country        String        @default("AR")
+  isActive       Boolean       @default(true)
+  aliases        String[]
+  accounts       Account[]
+  imports        ImportBatch[]
+  assetAliases   AssetAlias[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model Account {
+  id             String       @id @default(cuid())
+  organizationId String
+  clientId       String
+  custodianId    String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client         Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  custodian      Custodian    @relation(fields: [custodianId], references: [id], onDelete: Restrict)
+  kind           AccountKind  @default(INVESTMENT)
+  name           String
+  number         String?
+  currency       String       @default("ARS")
+  imports        ImportBatch[]
+  holdings       Holding[]
+  movements      Movement[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, clientId, custodianId, name])
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([custodianId])
+}
+
+model Asset {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  symbol         String
+  name           String
+  assetClass     AssetClass
+  currency       String        @default("ARS")
+  isin           String?
+  ticker         String?
+  isFund         Boolean       @default(false)
+  isCashLike     Boolean       @default(false)
+  aliases        AssetAlias[]
+  holdings       Holding[]
+  movements      Movement[]
+  prices         Price[]
+  bondMaster     BondMaster?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([organizationId, symbol])
+  @@index([organizationId, assetClass])
+}
+
+model AssetAlias {
+  id          String      @id @default(cuid())
+  assetId     String
+  custodianId String?
+  asset       Asset       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  custodian   Custodian?  @relation(fields: [custodianId], references: [id], onDelete: SetNull)
+  alias       String
+  normalized  String
+  confidence  Decimal?    @db.Decimal(5, 4)
+  createdAt   DateTime    @default(now())
+
+  @@unique([assetId, normalized, custodianId])
+  @@index([normalized])
+}
+
+model ImportBatch {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  clientId            String
+  accountId           String?
+  custodianId         String?
+  createdById         String?
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client              Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  account             Account?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  custodian           Custodian?   @relation(fields: [custodianId], references: [id], onDelete: SetNull)
+  createdBy           User?        @relation("CreatedImports", fields: [createdById], references: [id], onDelete: SetNull)
+  status              ImportStatus @default(UPLOADED)
+  reportKind          ReportKind
+  filename            String
+  fileType            String
+  mimeType            String?
+  detectedCustodian   String?
+  detectionConfidence Decimal?     @db.Decimal(5, 4)
+  reportDate          DateTime?
+  warningsJson        Json?
+  sourcePayload       Json?
+  rawText             String?
+  legacyPortfolioId   String?
+  rows                ImportRow[]
+  holdings            Holding[]
+  movements           Movement[]
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([organizationId, clientId, status])
+  @@index([accountId])
+  @@index([custodianId])
+}
+
+model ImportRow {
+  id             String         @id @default(cuid())
+  batchId        String
+  organizationId String
+  clientId       String
+  accountId      String?
+  batch          ImportBatch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client         Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  account        Account?       @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  rowIndex       Int
+  state          ImportRowState @default(READY)
+  reportKind     ReportKind
+  matchStatus    MatchStatus    @default(MATCHED)
+  rawData        Json
+  normalizedData Json
+  errorMessage   String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([batchId, rowIndex])
+  @@index([organizationId, clientId])
+  @@index([accountId])
+}
+
+model Holding {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  clientId            String
+  accountId           String
+  assetId             String
+  sourceImportBatchId String?
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client              Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  account             Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  asset               Asset        @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  sourceImportBatch   ImportBatch? @relation(fields: [sourceImportBatchId], references: [id], onDelete: SetNull)
+  quantity            Decimal      @db.Decimal(28, 10)
+  availableQuantity   Decimal      @default(0) @db.Decimal(28, 10)
+  pledgedQuantity     Decimal      @default(0) @db.Decimal(28, 10)
+  averageCost         Decimal?     @db.Decimal(28, 10)
+  marketPrice         Decimal?     @db.Decimal(28, 10)
+  fxRate              Decimal?     @db.Decimal(18, 8)
+  marketValueArs      Decimal?     @db.Decimal(28, 10)
+  marketValueUsd      Decimal?     @db.Decimal(28, 10)
+  pnlAmountArs        Decimal?     @db.Decimal(28, 10)
+  pnlIsEstimated      Boolean      @default(false)
+  valuationDate       DateTime?
+  legacyPortfolioId   String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@unique([organizationId, accountId, assetId])
+  @@index([organizationId, clientId])
+  @@index([sourceImportBatchId])
+}
+
+model Movement {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  clientId            String
+  accountId           String
+  assetId             String?
+  sourceImportBatchId String?
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client              Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  account             Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  asset               Asset?       @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  sourceImportBatch   ImportBatch? @relation(fields: [sourceImportBatchId], references: [id], onDelete: SetNull)
+  type                MovementType
+  tradeDate           DateTime
+  settlementDate      DateTime?
+  description         String?
+  externalRef         String?
+  quantity            Decimal?     @db.Decimal(28, 10)
+  price               Decimal?     @db.Decimal(28, 10)
+  grossAmount         Decimal?     @db.Decimal(28, 10)
+  netAmount           Decimal?     @db.Decimal(28, 10)
+  fees                Decimal?     @db.Decimal(28, 10)
+  taxes               Decimal?     @db.Decimal(28, 10)
+  currency            String       @default("ARS")
+  fxRate              Decimal?     @db.Decimal(18, 8)
+  legacyPortfolioId   String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([organizationId, clientId, tradeDate])
+  @@index([accountId])
+  @@index([assetId])
+  @@unique([accountId, externalRef])
+}
+
+model Price {
+  id             String       @id @default(cuid())
+  organizationId String
+  assetId        String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset          Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  source         PriceSource
+  date           DateTime
+  price          Decimal      @db.Decimal(28, 10)
+  currency       String       @default("ARS")
+  createdAt      DateTime     @default(now())
+
+  @@unique([assetId, source, date])
+  @@index([organizationId, date])
+}
+
+model FxRate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code           String
+  date           DateTime
+  rate           Decimal      @db.Decimal(18, 8)
+  source         PriceSource  @default(FX)
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, code, date, source])
+}
+
+model FundMaster {
+  id          String       @id @default(cuid())
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assetId     String?      @unique
+  asset       Asset?       @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  code        String
+  name        String
+  manager     String?
+  aliases     FundAlias[]
+  prices      FundPrice[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([organizationId, code])
+}
+
+model FundAlias {
+  id            String      @id @default(cuid())
+  fundMasterId  String
+  custodianId   String?
+  fundMaster    FundMaster  @relation(fields: [fundMasterId], references: [id], onDelete: Cascade)
+  custodian     Custodian?  @relation(fields: [custodianId], references: [id], onDelete: SetNull)
+  alias         String
+  normalized    String
+  createdAt     DateTime    @default(now())
+
+  @@unique([fundMasterId, normalized, custodianId])
+}
+
+model FundPrice {
+  id            String      @id @default(cuid())
+  fundMasterId  String
+  fundMaster    FundMaster  @relation(fields: [fundMasterId], references: [id], onDelete: Cascade)
+  date          DateTime
+  vcp           Decimal     @db.Decimal(28, 10)
+  currency      String      @default("ARS")
+  source        PriceSource @default(FUND)
+  createdAt     DateTime    @default(now())
+
+  @@unique([fundMasterId, date, source])
+}
+
+model BondMaster {
+  id              String        @id @default(cuid())
+  assetId         String        @unique
+  asset           Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  issuer          String?
+  maturityDate    DateTime?
+  couponRate      Decimal?      @db.Decimal(10, 6)
+  paymentCurrency String?
+  cashflows       BondCashflow[]
+  analytics       BondAnalytics[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+model BondCashflow {
+  id           String      @id @default(cuid())
+  bondMasterId String
+  bondMaster   BondMaster  @relation(fields: [bondMasterId], references: [id], onDelete: Cascade)
+  paymentDate  DateTime
+  kind         String
+  amount       Decimal     @db.Decimal(28, 10)
+  currency     String
+  createdAt    DateTime    @default(now())
+
+  @@index([bondMasterId, paymentDate])
+}
+
+model BondAnalytics {
+  id           String      @id @default(cuid())
+  bondMasterId String
+  bondMaster   BondMaster  @relation(fields: [bondMasterId], references: [id], onDelete: Cascade)
+  asOfDate     DateTime
+  yieldToMaturity Decimal? @db.Decimal(18, 8)
+  duration     Decimal?    @db.Decimal(18, 8)
+  modifiedDuration Decimal? @db.Decimal(18, 8)
+  price        Decimal?    @db.Decimal(28, 10)
+  source       PriceSource @default(MANUAL)
+  createdAt    DateTime    @default(now())
+
+  @@unique([bondMasterId, asOfDate, source])
+}
