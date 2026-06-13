@@ -1,17 +1,19 @@
-import { Building2, ChartPie, Download, Landmark, Layers3, Shield, Users } from "lucide-react";
+import { ChartPie, Download, Landmark, Shield, Users } from "lucide-react";
 import { Link, useLocation } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 const nav = [
-  { to: "/", label: "Dashboard", icon: ChartPie },
-  { to: "/clientes", label: "Clientes", icon: Users },
-  { to: "/imports", label: "Imports", icon: Download },
-  { to: "/movimientos", label: "Movimientos", icon: Layers3 },
-  { to: "/assets", label: "Asset Master", icon: Building2 },
-  { to: "/funds", label: "Fund Master", icon: Landmark },
-  { to: "/settings/custodians", label: "Custodios", icon: Landmark },
-  { to: "/settings/users", label: "Usuarios", icon: Shield },
+  { to: "/", label: "Dashboard", icon: ChartPie, activePrefix: "/" },
+  { to: "/clientes", label: "Clientes", icon: Users, activePrefix: "/clientes" },
+  { to: "/imports", label: "Importar", icon: Download, activePrefix: "/imports" },
+  { to: "/precios", label: "Precios", icon: Landmark, activePrefix: "/precios" },
+  {
+    to: "/settings/custodians",
+    label: "Configuracion",
+    icon: Shield,
+    activePrefix: "/settings",
+  },
 ];
 
 export function AdvisorShell({ children }: { children: ReactNode }) {
@@ -26,7 +28,9 @@ export function AdvisorShell({ children }: { children: ReactNode }) {
               <span className="font-display text-lg leading-none">A</span>
             </div>
             <div className="leading-tight">
-              <div className="font-display text-lg tracking-tight text-foreground">Apex Wealth Hub</div>
+              <div className="font-display text-lg tracking-tight text-foreground">
+                Apex Wealth Hub
+              </div>
               <div className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
                 Multi-Custody Portfolio Office
               </div>
@@ -35,7 +39,10 @@ export function AdvisorShell({ children }: { children: ReactNode }) {
 
           <nav className="hidden flex-1 items-center justify-center gap-1 lg:flex">
             {nav.map((item) => {
-              const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
+              const active =
+                item.activePrefix === "/"
+                  ? pathname === "/"
+                  : pathname.startsWith(item.activePrefix);
               const Icon = item.icon;
               return (
                 <Link
@@ -72,7 +79,7 @@ export function AdvisorShell({ children }: { children: ReactNode }) {
       <main className="mx-auto max-w-[1520px] px-5 py-6">{children}</main>
 
       <footer className="mx-auto max-w-[1520px] px-5 pb-8 pt-3 text-[11px] text-muted-foreground">
-        Apex Wealth Hub · Consolidacion multi-custodio · Uso interno y clientes con permisos
+        Apex Wealth Hub | Consolidacion multi-custodio | Uso interno y clientes con permisos
       </footer>
     </div>
   );

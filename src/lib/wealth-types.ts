@@ -110,6 +110,8 @@ export type HoldingRecord = {
   availableQuantity: number;
   pledgedQuantity: number;
   averageCost: number | null;
+  importPrice: number | null;
+  currentPrice: number | null;
   marketPrice: number | null;
   fxRate: number | null;
   marketValueArs: number;
@@ -307,6 +309,32 @@ export type FundsPageBundle = {
     latestPrice: number | null;
     latestPriceDate: string | null;
   }>;
+};
+
+export type PricesPageBundle = {
+  prices: Array<{
+    symbol: string;
+    description: string;
+    assetClass: AssetClass;
+    currency: string;
+    currentPrice: number | null;
+    pctChange: number | null;
+    source: "DATA912" | "ARGENTINA_DATOS";
+    updatedAt: string | null;
+    bid: number | null;
+    ask: number | null;
+  }>;
+  marketDataStatus: MarketDataStatus;
+  fetchedAt: string | null;
+  errors: Array<{
+    endpoint: string;
+    message: string;
+  }>;
+  dollars: {
+    mep: number | null;
+    ccl: number | null;
+    updatedAt: string | null;
+  };
 };
 
 export type SettingsBundle = {

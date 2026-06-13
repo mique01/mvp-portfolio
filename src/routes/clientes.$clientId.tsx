@@ -1,10 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-  ArrowLeft,
-  Building2,
-  Landmark,
-  Wallet,
-} from "lucide-react";
+import { ArrowLeft, Building2, Landmark, Wallet } from "lucide-react";
 import { AdvisorShell } from "@/components/AdvisorShell";
 import { AllocationPie } from "@/components/AllocationPie";
 import { Section } from "@/components/Section";
@@ -18,7 +13,11 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { loadClientDetail } from "@/lib/server/crm-server-functions";
-import type { DistributionPoint, HoldingRecord, MarketDataStatus } from "@/lib/wealth-types";
+import type {
+  DistributionPoint,
+  HoldingRecord,
+  MarketDataStatus,
+} from "@/lib/wealth-types";
 
 export const Route = createFileRoute("/clientes/$clientId")({
   loader: ({ params }) => loadClientDetail({ data: { clientId: params.clientId } }),
@@ -55,7 +54,9 @@ function ClientDetailPage() {
                 <Badge variant="outline">{data.client.type}</Badge>
                 <Badge variant="secondary">{statusLabel(data.totals.marketDataStatus)}</Badge>
                 {estimatedCount > 0 ? (
-                  <Badge variant="secondary">{estimatedCount} posiciones con PnL estimado</Badge>
+                  <Badge variant="secondary">
+                    {estimatedCount} posiciones con PnL estimado
+                  </Badge>
                 ) : null}
               </div>
               <div>
@@ -89,12 +90,18 @@ function ClientDetailPage() {
             <StatCard
               label="Valuacion USD"
               value={formatMoney(data.totals.totalValueUsd, "USD")}
-              hint={data.totals.mepRate ? `MEP ${formatCompact(data.totals.mepRate)}` : "Sin FX live"}
+              hint={
+                data.totals.mepRate ? `MEP ${formatMoney(data.totals.mepRate)}` : "Sin FX live"
+              }
             />
             <StatCard
               label="PnL"
               value={formatMoney(data.totals.pnlAmountArs)}
-              hint={data.totals.pnlPct != null ? `${data.totals.pnlPct.toFixed(2)}% sobre costo` : "Sin costo suficiente"}
+              hint={
+                data.totals.pnlPct != null
+                  ? `${data.totals.pnlPct.toFixed(2)}% sobre costo`
+                  : "Sin costo suficiente"
+              }
               accent={
                 data.totals.pnlAmountArs != null && data.totals.pnlAmountArs >= 0
                   ? "success"
@@ -128,7 +135,9 @@ function ClientDetailPage() {
                 <Landmark className="h-4 w-4 text-primary" />
                 <div>
                   <p className="text-sm font-medium text-foreground">Por ALyC</p>
-                  <p className="text-xs text-muted-foreground">Click abajo para ver subdivision</p>
+                  <p className="text-xs text-muted-foreground">
+                    Click abajo para ver subdivision
+                  </p>
                 </div>
               </div>
               <AllocationPie data={topCustodianDistribution} valueFormatter={formatMoney} />
@@ -139,7 +148,9 @@ function ClientDetailPage() {
                 <Wallet className="h-4 w-4 text-primary" />
                 <div>
                   <p className="text-sm font-medium text-foreground">Por activo</p>
-                  <p className="text-xs text-muted-foreground">Top posiciones consolidadas</p>
+                  <p className="text-xs text-muted-foreground">
+                    Top posiciones consolidadas
+                  </p>
                 </div>
               </div>
               <AllocationPie data={topAssetDistribution} valueFormatter={formatMoney} />
@@ -149,8 +160,12 @@ function ClientDetailPage() {
               <div className="mb-4 flex items-center gap-2">
                 <Building2 className="h-4 w-4 text-primary" />
                 <div>
-                  <p className="text-sm font-medium text-foreground">Por comitente / cuenta</p>
-                  <p className="text-xs text-muted-foreground">Donde esta concentrado el portfolio</p>
+                  <p className="text-sm font-medium text-foreground">
+                    Por comitente / cuenta
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Donde esta concentrado el portfolio
+                  </p>
                 </div>
               </div>
               <AllocationPie data={topAccountDistribution} valueFormatter={formatMoney} />
@@ -170,7 +185,7 @@ function ClientDetailPage() {
                     <div>
                       <div className="font-medium text-foreground">{custodian.name}</div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {custodian.accounts.length} cuentas · {custodian.holdings.length} posiciones
+                        {custodian.accounts.length} cuentas | {custodian.holdings.length} posiciones
                       </div>
                     </div>
                     <div className="num text-sm font-medium text-foreground">
@@ -210,7 +225,7 @@ function ClientDetailPage() {
                             <div>
                               <div className="font-medium text-foreground">{account.name}</div>
                               <div className="mt-1 text-xs text-muted-foreground">
-                                {account.number || "Sin numero"} · {account.holdings.length} posiciones
+                                {account.number || "Sin numero"} | {account.holdings.length} posiciones
                               </div>
                             </div>
                             <Badge variant="outline">{account.pct.toFixed(1)}%</Badge>
@@ -239,13 +254,15 @@ function ClientDetailPage() {
                   </div>
 
                   <div className="overflow-x-auto rounded-md border border-border">
-                    <table className="min-w-[980px] w-full text-sm">
+                    <table className="min-w-[1280px] w-full text-sm">
                       <thead>
                         <tr className="border-b border-border bg-secondary/40 text-left text-xs uppercase tracking-[0.16em] text-muted-foreground">
                           <th className="px-4 py-3">Activo</th>
                           <th className="px-4 py-3">Cuenta</th>
                           <th className="px-4 py-3 text-right">Cantidad</th>
-                          <th className="px-4 py-3 text-right">Precio</th>
+                          <th className="px-4 py-3 text-right">Precio archivo</th>
+                          <th className="px-4 py-3 text-right">Precio actual</th>
+                          <th className="px-4 py-3 text-right">Precio usado</th>
                           <th className="px-4 py-3 text-right">Costo</th>
                           <th className="px-4 py-3 text-right">Valuacion</th>
                           <th className="px-4 py-3 text-right">PnL</th>
@@ -253,12 +270,20 @@ function ClientDetailPage() {
                       </thead>
                       <tbody>
                         {custodian.holdings.map((holding) => (
-                          <tr key={holding.id} className="border-b border-border/60 last:border-b-0">
+                          <tr
+                            key={holding.id}
+                            className="border-b border-border/60 last:border-b-0"
+                          >
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-2">
                                 <div className="font-medium text-foreground">{holding.symbol}</div>
                                 <Badge variant="outline">{holding.assetClass}</Badge>
-                                <Badge variant="secondary">{priceSourceLabel(holding.priceSource)}</Badge>
+                                <Badge variant="secondary">
+                                  {priceSourceLabel(holding.priceSource)}
+                                </Badge>
+                                {holding.pnlIsEstimated ? (
+                                  <Badge variant="outline">PnL estimado</Badge>
+                                ) : null}
                               </div>
                               <div className="mt-1 text-xs text-muted-foreground">
                                 {holding.assetName}
@@ -268,7 +293,8 @@ function ClientDetailPage() {
                               <div>{holding.accountName}</div>
                               {holding.quantityDelta !== 0 ? (
                                 <div className="mt-1 text-xs text-primary">
-                                  Ajustada por movimientos: {formatSignedNumber(holding.quantityDelta)}
+                                  Ajustada por movimientos:{" "}
+                                  {formatSignedNumber(holding.quantityDelta)}
                                 </div>
                               ) : null}
                             </td>
@@ -276,10 +302,26 @@ function ClientDetailPage() {
                               {holding.quantity.toLocaleString("es-AR")}
                             </td>
                             <td className="px-4 py-3 text-right">
-                              {formatMoney(
-                                holding.marketPrice,
-                                holding.priceCurrency?.startsWith("USD") ? "USD" : "ARS",
-                              )}
+                              {formatHoldingPrice(holding.importPrice, holding.currency)}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              {holding.currentPrice != null
+                                ? formatHoldingPrice(
+                                    holding.currentPrice,
+                                    holding.priceCurrency ?? holding.currency,
+                                  )
+                                : "Sin live"}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div>
+                                {formatHoldingPrice(
+                                  holding.marketPrice,
+                                  holding.priceCurrency ?? holding.currency,
+                                )}
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {priceSourceLabel(holding.priceSource)}
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-right">
                               {formatMoney(holding.costBasisArs)}
@@ -290,13 +332,21 @@ function ClientDetailPage() {
                             <td className="px-4 py-3 text-right">
                               <div
                                 className={`num font-medium ${
-                                  (holding.pnlAmountArs ?? 0) >= 0 ? "text-success" : "text-destructive"
+                                  (holding.pnlAmountArs ?? 0) >= 0
+                                    ? "text-success"
+                                    : "text-destructive"
                                 }`}
                               >
                                 {formatMoney(holding.pnlAmountArs)}
                               </div>
                               <div className="mt-1 text-xs text-muted-foreground">
-                                {holding.pnlPct != null ? `${holding.pnlPct.toFixed(2)}%` : "Sin costo"}
+                                {holding.averageCost == null
+                                  ? "PnL no disponible"
+                                  : holding.pnlIsEstimated
+                                    ? "PnL estimado"
+                                    : holding.pnlPct != null
+                                      ? `${holding.pnlPct.toFixed(2)}%`
+                                      : "PnL no disponible"}
                               </div>
                             </td>
                           </tr>
@@ -344,7 +394,9 @@ function ClientDetailPage() {
                           {movement.description ?? "Movimiento sin descripcion"}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{movement.custodianName}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {movement.custodianName}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         {movement.quantity?.toLocaleString("es-AR") ?? "-"}
                       </td>
@@ -434,7 +486,7 @@ function priceSourceLabel(source: HoldingRecord["priceSource"]) {
     case "MANUAL":
       return "Manual";
     default:
-      return "Import";
+      return "Archivo";
   }
 }
 
@@ -464,12 +516,40 @@ function formatMoney(value: number | null | undefined, currency: "ARS" | "USD" =
   })}`;
 }
 
+function formatHoldingPrice(value: number | null | undefined, currency: string) {
+  if (value == null) return "N/D";
+  const prefix = currency.startsWith("USD") ? "US$ " : "$ ";
+  return `${prefix}${value.toLocaleString("es-AR", {
+    maximumFractionDigits: currency.startsWith("USD") ? 6 : 4,
+  })}`;
+}
+
 function formatCompact(value: number | null | undefined) {
   if (value == null) return "N/D";
-  return value.toLocaleString("es-AR", {
-    notation: "compact",
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+
+  if (abs >= 1_000_000_000) {
+    return `${sign}${(abs / 1_000_000_000).toLocaleString("es-AR", {
+      maximumFractionDigits: 1,
+    })} B`;
+  }
+
+  if (abs >= 1_000_000) {
+    return `${sign}${(abs / 1_000_000).toLocaleString("es-AR", {
+      maximumFractionDigits: 1,
+    })} M`;
+  }
+
+  if (abs >= 1_000) {
+    return `${sign}${(abs / 1_000).toLocaleString("es-AR", {
+      maximumFractionDigits: 1,
+    })} K`;
+  }
+
+  return `${sign}${abs.toLocaleString("es-AR", {
     maximumFractionDigits: 1,
-  });
+  })}`;
 }
 
 function formatSignedNumber(value: number) {
@@ -478,8 +558,13 @@ function formatSignedNumber(value: number) {
 }
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString("es-AR", {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return new Intl.DateTimeFormat("es-AR", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
 }

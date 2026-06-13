@@ -3,6 +3,7 @@ import { parseImportBatchInput } from "@/lib/server/import-parser";
 import {
   loadConsolidatedMarketData,
   loadDollarRates,
+  type MarketTipo,
 } from "@/lib/server/market-data";
 import type {
   AccountRecord,
@@ -32,6 +33,7 @@ import type {
   MovementRecord,
   MovementType,
   PriceOrigin,
+  PricesPageBundle,
   SaveImportRowsInput,
   SettingsBundle,
 } from "@/lib/wealth-types";
@@ -101,6 +103,24 @@ function assetClassLabel(assetClass: AssetClass) {
   return assetClass.replace(/_/g, " ");
 }
 
+function marketTipoToAssetClass(tipo: MarketTipo): AssetClass {
+  switch (tipo) {
+    case "BONDS":
+      return "SOVEREIGN_BOND";
+    case "NOTES":
+      return "LETTER";
+    case "CEDEARS":
+      return "CEDEAR";
+    case "CORP":
+      return "CORPORATE_BOND";
+    case "STOCKS":
+      return "EQUITY";
+    case "FCI":
+    default:
+      return "FUND";
+  }
+}
+
 function aggregateBy<T>(items: T[], getKey: (item: T) => string, getValue: (item: T) => number) {
   const map = new Map<string, number>();
   items.forEach((item) => {
@@ -158,6 +178,19 @@ function normalizeFundQuotePrice(
     return rawPrice / 1000;
   }
   return rawPrice;
+}
+
+function quoteMidPrice(quote: {
+  bid: number;
+  ask: number;
+  last: number;
+}) {
+  const hasBid = quote.bid > 0;
+  const hasAsk = quote.ask > 0;
+  if (hasBid && hasAsk) return (quote.bid + quote.ask) / 2;
+  if (hasBid) return quote.bid;
+  if (hasAsk) return quote.ask;
+  return quote.last;
 }
 
 function signedMovementQuantity(movement: MovementRecord) {
@@ -299,9 +332,11 @@ function createDerivedHolding(
   const priceCandidate =
     pricing.marketBySymbol.get(normalizeLookupKey(holding.symbol)) ??
     pricing.marketBySymbol.get(normalizeLookupKey(holding.assetName));
+  const importPrice = holding.importPrice ?? holding.marketPrice;
+  const currentPrice = priceCandidate?.price ?? null;
   const marketPrice =
-    priceCandidate?.price ??
-    holding.marketPrice ??
+    currentPrice ??
+    importPrice ??
     (holding.assetClass === "CASH" ? 1 : null);
   const priceSource = priceCandidate?.source ?? (holding.assetClass === "CASH" ? "CASH" : "IMPORT");
   const priceCurrency =
@@ -345,16 +380,22 @@ function createDerivedHolding(
     pnlAmountArs == null || costBasisArs == null || costBasisArs <= 0
       ? null
       : Number(((pnlAmountArs / costBasisArs) * 100).toFixed(2));
+  const pnlNeedsEstimate =
+    holding.pnlIsEstimated ||
+    holding.averageCost == null ||
+    !["LIVE_MARKET", "LIVE_FUND", "CASH"].includes(priceSource);
 
   return {
     ...holding,
+    importPrice,
+    currentPrice,
     marketPrice,
     fxRate,
     marketValueArs: round(marketValueArs) ?? 0,
     marketValueUsd: round(marketValueUsd),
     pnlAmountArs,
     pnlPct,
-    pnlIsEstimated: holding.pnlIsEstimated || holding.averageCost == null,
+    pnlIsEstimated: pnlNeedsEstimate,
     costBasisArs: round(costBasisArs),
     priceSource,
     priceCurrency,
@@ -403,6 +444,8 @@ function deriveHoldingsFromState(state: StateSnapshot, pricing: PricingContext) 
       availableQuantity: 0,
       pledgedQuantity: 0,
       averageCost: null,
+      importPrice: null,
+      currentPrice: null,
       marketPrice: null,
       fxRate: null,
       marketValueArs: 0,
@@ -805,6 +848,8 @@ function getMemoryState() {
 
   const holdings: HoldingRecord[] = holdingsBase.map((holding) => ({
     ...holding,
+    importPrice: holding.marketPrice,
+    currentPrice: null,
     pnlPct:
       holding.averageCost != null && holding.quantity > 0
         ? Number(
@@ -1041,6 +1086,8 @@ async function readState(): Promise<StateSnapshot> {
       availableQuantity: Number(holding.availableQuantity),
       pledgedQuantity: Number(holding.pledgedQuantity),
       averageCost: holding.averageCost == null ? null : Number(holding.averageCost),
+      importPrice: holding.marketPrice == null ? null : Number(holding.marketPrice),
+      currentPrice: null,
       marketPrice: holding.marketPrice == null ? null : Number(holding.marketPrice),
       fxRate: holding.fxRate == null ? null : Number(holding.fxRate),
       marketValueArs: Number(holding.marketValueArs ?? 0),
@@ -1300,6 +1347,89 @@ export async function getAssetsBundle(): Promise<AssetsPageBundle> {
 export async function getFundsBundle(): Promise<FundsPageBundle> {
   const state = await readState();
   return { funds: state.funds };
+}
+
+export async function getPricesBundle(options?: {
+  forceRefresh?: boolean;
+}): Promise<PricesPageBundle> {
+  const [state, market, dollars] = await Promise.all([
+    readState(),
+    loadConsolidatedMarketData(options),
+    loadDollarRates(options),
+  ]);
+
+  const assetByLookup = new Map<string, AssetRecord>();
+  state.assets.forEach((asset) => {
+    [asset.symbol, asset.name].forEach((value) => {
+      const key = normalizeLookupKey(value);
+      if (key && !assetByLookup.has(key)) {
+        assetByLookup.set(key, asset);
+      }
+    });
+  });
+
+  const fundByLookup = new Map<string, FundRecord>();
+  state.funds.forEach((fund) => {
+    [fund.code, fund.name, fund.assetSymbol].forEach((value) => {
+      const key = normalizeLookupKey(value);
+      if (key && !fundByLookup.has(key)) {
+        fundByLookup.set(key, fund);
+      }
+    });
+  });
+
+  const prices = [...market.bySymbol.values()]
+    .map((quote) => {
+      const asset =
+        assetByLookup.get(normalizeLookupKey(quote.symbol)) ??
+        assetByLookup.get(normalizeLookupKey(quote.label)) ??
+        null;
+      const fund =
+        fundByLookup.get(normalizeLookupKey(quote.symbol)) ??
+        fundByLookup.get(normalizeLookupKey(quote.label)) ??
+        null;
+      const assetFromFund =
+        fund?.assetSymbol != null
+          ? assetByLookup.get(normalizeLookupKey(fund.assetSymbol)) ?? null
+          : null;
+      const matchedAsset = asset ?? assetFromFund;
+      const currency =
+        quote.tipo === "FCI"
+          ? inferQuoteCurrency(matchedAsset?.currency, quote.label ?? quote.symbol)
+          : matchedAsset?.currency ?? inferQuoteCurrency(undefined, quote.label ?? quote.symbol);
+      const rawPrice = quoteMidPrice(quote);
+      const normalizedPrice =
+        quote.tipo === "FCI" ? normalizeFundQuotePrice(rawPrice, currency) : rawPrice;
+
+      return {
+        symbol: quote.symbol,
+        description: matchedAsset?.name ?? fund?.name ?? quote.label ?? quote.symbol,
+        assetClass: matchedAsset?.assetClass ?? marketTipoToAssetClass(quote.tipo),
+        currency,
+        currentPrice: normalizedPrice > 0 ? round(normalizedPrice, currency.startsWith("USD") ? 6 : 4) : null,
+        pctChange: quote.tipo === "FCI" ? null : round(quote.pct_change, 2),
+        source: quote.tipo === "FCI" ? "ARGENTINA_DATOS" : "DATA912",
+        updatedAt: quote.fecha ?? market.fetchedAt,
+        bid: quote.bid > 0 ? round(quote.bid, currency.startsWith("USD") ? 6 : 4) : null,
+        ask: quote.ask > 0 ? round(quote.ask, currency.startsWith("USD") ? 6 : 4) : null,
+      };
+    })
+    .sort((left, right) => left.symbol.localeCompare(right.symbol));
+
+  return {
+    prices,
+    marketDataStatus: market.marketDataStatus,
+    fetchedAt: market.fetchedAt,
+    errors: market.errors.map((error) => ({
+      endpoint: error.endpoint,
+      message: error.message,
+    })),
+    dollars: {
+      mep: dollars.mep?.venta && dollars.mep.venta > 0 ? Number(dollars.mep.venta) : null,
+      ccl: dollars.ccl?.venta && dollars.ccl.venta > 0 ? Number(dollars.ccl.venta) : null,
+      updatedAt: dollars.fetchedAt,
+    },
+  };
 }
 
 export async function getSettingsBundle(): Promise<SettingsBundle> {
@@ -1630,6 +1760,8 @@ export async function confirmImportBatch(importId: string) {
           availableQuantity: row.availableQuantity ?? row.quantity ?? 0,
           pledgedQuantity: row.pledgedQuantity ?? 0,
           averageCost: row.averageCost,
+          importPrice: row.price,
+          currentPrice: null,
           marketPrice: row.price,
           fxRate,
           marketValueArs,

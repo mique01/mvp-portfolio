@@ -13,6 +13,7 @@ import {
   getFundsBundle,
   getImportBatchDetail,
   getImportsBundle,
+  getPricesBundle,
   getSettingsBundle,
   saveImportRows,
 } from "@/lib/server/wealth-repository";
@@ -23,6 +24,10 @@ const clientIdSchema = z.object({
 
 const importIdSchema = z.object({
   importId: z.string().min(1),
+});
+
+const refreshPricesSchema = z.object({
+  forceRefresh: z.boolean().optional(),
 });
 
 const createClientSchema = z.object({
@@ -171,6 +176,10 @@ export const loadFundsData = createServerFn({ method: "GET" }).handler(async () 
   return getFundsBundle();
 });
 
+export const loadPricesData = createServerFn({ method: "GET" }).handler(async () => {
+  return getPricesBundle();
+});
+
 export const loadSettingsData = createServerFn({ method: "GET" }).handler(async () => {
   return getSettingsBundle();
 });
@@ -216,6 +225,12 @@ export const confirmImportBatchAction = createServerFn({ method: "POST" })
   .inputValidator(importIdSchema)
   .handler(async ({ data }) => {
     return confirmImportBatch(data.importId);
+  });
+
+export const refreshPricesAction = createServerFn({ method: "POST" })
+  .inputValidator(refreshPricesSchema)
+  .handler(async ({ data }) => {
+    return getPricesBundle({ forceRefresh: data.forceRefresh ?? true });
   });
 
 // Compatibility exports kept while the old commission/model-portfolio components are phased out.
