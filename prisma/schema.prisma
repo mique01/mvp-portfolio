@@ -117,10 +117,12 @@ model Organization {
   accounts     Account[]
   assets       Asset[]
   imports      ImportBatch[]
+  importRows   ImportRow[]
   holdings     Holding[]
   movements    Movement[]
   prices       Price[]
   fxRates      FxRate[]
+  fundMasters  FundMaster[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -154,6 +156,7 @@ model Client {
   clientUsers    ClientUser[]
   accounts       Account[]
   imports        ImportBatch[]
+  importRows     ImportRow[]
   holdings       Holding[]
   movements      Movement[]
   createdAt      DateTime      @default(now())
@@ -188,6 +191,7 @@ model Custodian {
   accounts       Account[]
   imports        ImportBatch[]
   assetAliases   AssetAlias[]
+  fundAliases    FundAlias[]
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
@@ -208,6 +212,7 @@ model Account {
   number         String?
   currency       String       @default("ARS")
   imports        ImportBatch[]
+  importRows     ImportRow[]
   holdings       Holding[]
   movements      Movement[]
   createdAt      DateTime     @default(now())
@@ -235,6 +240,7 @@ model Asset {
   holdings       Holding[]
   movements      Movement[]
   prices         Price[]
+  fundMaster     FundMaster?
   bondMaster     BondMaster?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
