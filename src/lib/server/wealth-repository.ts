@@ -1133,7 +1133,7 @@ export async function confirmImportBatch(importId: string) {
           accountId,
           assetId: asset?.id ?? null,
           symbol: asset?.symbol ?? row.symbol ?? null,
-          assetName: asset?.name ?? row.description || null,
+          assetName: asset?.name ?? row.description ?? null,
           movementType: (row.movementType || "OTHER") as MovementType,
           description: row.description,
           tradeDate: row.tradeDate ?? batch.reportDate ?? nowIso().slice(0, 10),
