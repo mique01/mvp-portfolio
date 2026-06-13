@@ -71,6 +71,7 @@ type PricingContext = {
       price: number;
       asOf: string | null;
       source: PriceOrigin;
+      quoteCurrency: string;
     }
   >;
 };
@@ -177,12 +178,16 @@ function movementUnitCost(movement: MovementRecord) {
 }
 
 async function loadPricingContext(state: StateSnapshot): Promise<PricingContext> {
+  const assetCurrencyBySymbol = new Map(
+    state.assets.map((asset) => [normalizeLookupKey(asset.symbol), asset.currency] as const),
+  );
   const fundLookup = new Map<
     string,
     {
       price: number;
       asOf: string | null;
       source: PriceOrigin;
+      quoteCurrency: string;
     }
   >();
 
@@ -192,6 +197,10 @@ async function loadPricingContext(state: StateSnapshot): Promise<PricingContext>
       price: fund.latestPrice,
       asOf: fund.latestPriceDate,
       source: "IMPORT" as const,
+      quoteCurrency:
+        (fund.assetSymbol
+          ? assetCurrencyBySymbol.get(normalizeLookupKey(fund.assetSymbol))
+          : undefined) ?? "ARS",
     };
     [fund.code, fund.name, fund.assetSymbol].forEach((value) => {
       const key = normalizeLookupKey(value);
@@ -205,7 +214,10 @@ async function loadPricingContext(state: StateSnapshot): Promise<PricingContext>
       loadDollarRates(),
     ]);
 
-    const marketBySymbol = new Map<string, { price: number; asOf: string | null; source: PriceOrigin }>();
+    const marketBySymbol = new Map<
+      string,
+      { price: number; asOf: string | null; source: PriceOrigin; quoteCurrency: string }
+    >();
     market.quotes.forEach((quote) => {
       const hasBid = quote.bid > 0;
       const hasAsk = quote.ask > 0;
@@ -216,6 +228,7 @@ async function loadPricingContext(state: StateSnapshot): Promise<PricingContext>
         price: livePrice,
         asOf: quote.fecha ?? isoDate(market.fetchedAt),
         source: quote.tipo === "FCI" ? ("LIVE_FUND" as const) : ("LIVE_MARKET" as const),
+        quoteCurrency: quote.tipo === "FCI" ? "ARS" : "NATIVE",
       };
 
       [quote.symbol, quote.label].forEach((value) => {
@@ -259,6 +272,9 @@ function createDerivedHolding(
     holding.marketPrice ??
     (holding.assetClass === "CASH" ? 1 : null);
   const priceSource = priceCandidate?.source ?? (holding.assetClass === "CASH" ? "CASH" : "IMPORT");
+  const priceCurrency =
+    priceCandidate?.quoteCurrency ??
+    (holding.assetClass === "CASH" ? holding.currency : holding.currency);
   const priceDate = priceCandidate?.asOf ?? holding.priceDate ?? holding.valuationDate;
   const fxRate =
     holding.currency.startsWith("USD")
@@ -268,12 +284,18 @@ function createDerivedHolding(
   const marketValueArs =
     marketPrice == null
       ? holding.marketValueArs
+      : priceCurrency === "ARS"
+        ? quantity * marketPrice
       : holding.currency.startsWith("USD")
         ? quantity * marketPrice * fxRate
         : quantity * marketPrice;
   const marketValueUsd =
     marketPrice == null
       ? holding.marketValueUsd
+      : priceCurrency === "ARS"
+        ? pricing.mepRate && pricing.mepRate > 0
+          ? marketValueArs / pricing.mepRate
+          : holding.marketValueUsd
       : holding.currency.startsWith("USD")
         ? quantity * marketPrice
         : pricing.mepRate && pricing.mepRate > 0
@@ -303,6 +325,7 @@ function createDerivedHolding(
     pnlIsEstimated: holding.pnlIsEstimated || holding.averageCost == null,
     costBasisArs: round(costBasisArs),
     priceSource,
+    priceCurrency,
     priceDate,
   };
 }
@@ -359,6 +382,7 @@ function deriveHoldingsFromState(state: StateSnapshot, pricing: PricingContext) 
       quantityDelta: 0,
       lastMovementDate: null,
       priceSource: "MANUAL",
+      priceCurrency: asset.currency,
       priceDate: null,
       valuationDate: null,
       custodianName: account.custodianName,
@@ -580,6 +604,7 @@ function getMemoryState() {
       | "quantityDelta"
       | "lastMovementDate"
       | "priceSource"
+      | "priceCurrency"
       | "priceDate"
     >
   > = [
@@ -765,6 +790,7 @@ function getMemoryState() {
     quantityDelta: 0,
     lastMovementDate: null,
     priceSource: holding.assetClass === "CASH" ? "CASH" : "IMPORT",
+    priceCurrency: holding.currency,
     priceDate: holding.valuationDate,
   }));
 
@@ -994,6 +1020,7 @@ async function readState(): Promise<StateSnapshot> {
       quantityDelta: 0,
       lastMovementDate: null,
       priceSource: holding.asset.assetClass === "CASH" ? "CASH" : "IMPORT",
+      priceCurrency: holding.asset.currency,
       priceDate: holding.valuationDate?.toISOString().slice(0, 10) ?? null,
       valuationDate: holding.valuationDate?.toISOString().slice(0, 10) ?? null,
       custodianName: holding.account.custodian.name,
@@ -1592,6 +1619,7 @@ export async function confirmImportBatch(importId: string) {
           quantityDelta: 0,
           lastMovementDate: null,
           priceSource: asset.assetClass === "CASH" ? "CASH" : "IMPORT",
+          priceCurrency: row.currency,
           priceDate: row.reportDate,
           valuationDate: row.reportDate,
           custodianName: batch.custodianName ?? account.custodianName,

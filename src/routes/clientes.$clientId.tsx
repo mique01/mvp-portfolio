@@ -276,7 +276,10 @@ function ClientDetailPage() {
                               {holding.quantity.toLocaleString("es-AR")}
                             </td>
                             <td className="px-4 py-3 text-right">
-                              {formatMoney(holding.marketPrice, holding.currency.startsWith("USD") ? "USD" : "ARS")}
+                              {formatMoney(
+                                holding.marketPrice,
+                                holding.priceCurrency?.startsWith("USD") ? "USD" : "ARS",
+                              )}
                             </td>
                             <td className="px-4 py-3 text-right">
                               {formatMoney(holding.costBasisArs)}

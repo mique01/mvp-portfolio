@@ -121,6 +121,7 @@ export type HoldingRecord = {
   quantityDelta: number;
   lastMovementDate: string | null;
   priceSource: PriceOrigin;
+  priceCurrency: string | null;
   priceDate: string | null;
   valuationDate: string | null;
   custodianName: string;
