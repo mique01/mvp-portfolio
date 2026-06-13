@@ -9,7 +9,7 @@ const nav = [
   { to: "/imports", label: "Importar", icon: Download, activePrefix: "/imports" },
   { to: "/precios", label: "Precios", icon: Landmark, activePrefix: "/precios" },
   {
-    to: "/settings/custodians",
+    to: "/settings",
     label: "Configuracion",
     icon: Shield,
     activePrefix: "/settings",

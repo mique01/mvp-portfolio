@@ -280,10 +280,7 @@ async function loadPricingContext(state: StateSnapshot): Promise<PricingContext>
       const assetCurrency =
         assetCurrencyBySymbol.get(normalizeLookupKey(quote.symbol)) ??
         assetCurrencyBySymbol.get(normalizeLookupKey(quote.label ?? ""));
-      const quoteCurrency =
-        quote.tipo === "FCI"
-          ? inferQuoteCurrency(assetCurrency, quote.label ?? quote.symbol)
-          : "NATIVE";
+      const quoteCurrency = inferQuoteCurrency(assetCurrency, quote.label ?? quote.symbol);
       const normalizedPrice =
         quote.tipo === "FCI"
           ? normalizeFundQuotePrice(livePrice, quoteCurrency)
@@ -346,28 +343,27 @@ function createDerivedHolding(
     priceCandidate?.quoteCurrency ??
     (holding.assetClass === "CASH" ? holding.currency : holding.currency);
   const priceDate = priceCandidate?.asOf ?? holding.priceDate ?? holding.valuationDate;
+  const usesUsdQuote = priceCurrency.startsWith("USD");
   const fxRate =
-    holding.currency.startsWith("USD")
+    usesUsdQuote || holding.currency.startsWith("USD")
       ? pricing.mepRate ?? holding.fxRate ?? 1
       : 1;
   const quantity = holding.quantity;
   const marketValueArs =
     marketPrice == null
       ? holding.marketValueArs
-      : priceCurrency === "ARS"
-        ? quantity * marketPrice
-      : holding.currency.startsWith("USD")
+      : usesUsdQuote
         ? quantity * marketPrice * fxRate
         : quantity * marketPrice;
   const marketValueUsd =
     marketPrice == null
       ? holding.marketValueUsd
-      : priceCurrency === "ARS"
+      : usesUsdQuote
+        ? quantity * marketPrice
+        : priceCurrency === "ARS"
         ? pricing.mepRate && pricing.mepRate > 0
           ? marketValueArs / pricing.mepRate
           : holding.marketValueUsd
-      : holding.currency.startsWith("USD")
-        ? quantity * marketPrice
         : pricing.mepRate && pricing.mepRate > 0
           ? marketValueArs / pricing.mepRate
           : holding.marketValueUsd;
